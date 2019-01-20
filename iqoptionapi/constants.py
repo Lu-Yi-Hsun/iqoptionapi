@@ -134,6 +134,7 @@ ACTIVES ={
     "OMGUSD":825,
     "ZECUSD":826,
     "ETCUSD":829,
+    "BTC:x100":830,
     "BTGUSD":837,
     "QTMUSD":845,
     "TRXUSD":858,
@@ -144,7 +145,11 @@ ACTIVES ={
     "DBX":889,
     "SPOT":891,
     "USDSGD":892,
-    "USDHKD":893
+    "USDHKD":893,
+    "XLM:x20":1117,
+    "XEM:x20":1120,
+    "TRX:x50":1242,
+    "EOS:x20":1244
 }
 
 
