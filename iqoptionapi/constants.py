@@ -1,6 +1,5 @@
-""
-"Module for IQ Option API constants."
-""#~~~need to update~~~
+"""Module for IQ Option API constants."""
+#~~~need to update~~~
     ACTIVES = {
         'EURUSD': 1,
         'EURGBP': 2,
