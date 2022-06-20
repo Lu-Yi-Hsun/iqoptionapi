@@ -1099,7 +1099,7 @@ class IQ_Option:
                 if data["msg"]["position"]["close_reason"] == "default":
                     return data["msg"]["position"]["pnl_realized"]
                 elif data["msg"]["position"]["close_reason"] == "expired":
-                    return data["msg"]["position"]["pnl_realized"] - data["msg"]["position"]["buy_amount"]
+                    return data["msg"]["position"]["close_effect_amount"] - data["msg"]["position"]["buy_amount"]
 
     def check_win_digital_v2(self, buy_order_id):
 
@@ -1109,7 +1109,7 @@ class IQ_Option:
         if order_data != None:
             if order_data["status"] == "closed":
                 if order_data["close_reason"] == "expired":
-                    return True, order_data["close_profit"] - order_data["invest"]
+                    return True, order_data["close_effect_amount"] - order_data["invest"]
                 elif order_data["close_reason"] == "default":
                     return True, order_data["pnl_realized"]
             else:
