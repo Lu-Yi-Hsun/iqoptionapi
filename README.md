@@ -1,13 +1,4 @@
-# Iqoption API
-
-great robot
-https://npt-life.com/iq-option-robot
-
-Iqoption API private version https://npt-life.com/iq-option-api
-
-olymptrade API https://npt-life.com/other-apis
-
-Pock Option API https://npt-life.com/other-apis
+ 
 
 ## Document
 
