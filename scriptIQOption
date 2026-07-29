@@ -1,0 +1,39 @@
+//@version=5
+indicator("SniperTrader_Binary v1", overlay=true)
+
+// 🎯 Inputs da estratégia
+emaCurta = input.int(9, "EMA Curta", minval=1)
+emaLonga = input.int(21, "EMA Longa", minval=1)
+rsiLen = input.int(14, "RSI Período", minval=1)
+rsiOB = input.int(70, "RSI Sobrecomprado")
+rsiOS = input.int(30, "RSI Sobrevendido")
+bbLen = input.int(20, "BB Período", minval=1)
+bbMult = input.float(2.0, "BB Multiplicador", minval=0.1)
+
+// 📈 Indicadores
+ema1 = ta.ema(close, emaCurta)
+ema2 = ta.ema(close, emaLonga)
+rsi = ta.rsi(close, rsiLen)
+
+basis = ta.sma(close, bbLen)
+dev = bbMult * ta.stdev(close, bbLen)
+bbUpper = basis + dev
+bbLower = basis - dev
+
+// 📌 Condições de entrada
+callSignal = ta.crossover(ema1, ema2) and rsi < rsiOS and close < bbLower
+putSignal = ta.crossunder(ema1, ema2) and rsi > rsiOB and close > bbUpper
+
+// 📍 Sinais visuais
+plotshape(callSignal, title="CALL", location=location.belowbar, color=color.green, style=shape.labelup, text="CALL")
+plotshape(putSignal, title="PUT", location=location.abovebar, color=color.red, style=shape.labeldown, text="PUT")
+
+// 📢 Alertas
+alertcondition(callSignal, title="Alerta CALL", message="SniperTrader_Binary: Sinal de CALL!")
+alertcondition(putSignal, title="Alerta PUT", message="SniperTrader_Binary: Sinal de PUT!")
+
+// 🔵 Visualização das EMAs e BB
+plot(ema1, title="EMA Curta", color=color.aqua)
+plot(ema2, title="EMA Longa", color=color.orange)
+plot(bbUpper, title="BB Superior", color=color.gray)
+plot(bbLower, title="BB Inferior", color=color.gray)
