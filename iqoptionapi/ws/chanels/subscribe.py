@@ -124,6 +124,8 @@ class Subscribe_live_deal(Base):
         elif name=="live-deal":
             _type_name="instrument_type"#
             _active_id="instrument_active_id"
+        else:
+            raise ValueError("unsupported live deal name: %s" % name)
 
 
         data = {"name":name,

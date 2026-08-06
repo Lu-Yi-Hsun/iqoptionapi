@@ -3,6 +3,7 @@
 import time
 import json
 import logging
+import math
 import threading
 import requests
 import ssl
@@ -65,6 +66,52 @@ import iqoptionapi.global_value as global_value
 from collections import defaultdict
 
 
+_DEFAULT_HTTP_REQUEST_TIMEOUT = 30
+_SENSITIVE_HTTP_KEYS = (
+    "authorization",
+    "cookie",
+    "password",
+    "set-cookie",
+    "ssid",
+    "token",
+)
+
+
+def _redact_http_mapping(value, redact_all=False):
+    if value is None:
+        return None
+    try:
+        items = value.items()
+    except AttributeError:
+        return "<redacted>" if redact_all else value
+    return {
+        key: (
+            "<redacted>"
+            if redact_all or any(marker in str(key).lower() for marker in _SENSITIVE_HTTP_KEYS)
+            else item_value
+        )
+        for key, item_value in items
+    }
+
+
+def _redact_http_cookies(value):
+    try:
+        value = value.get_dict()
+    except AttributeError:
+        pass
+    return _redact_http_mapping(value, redact_all=True)
+
+
+def _normalize_http_request_timeout(timeout):
+    try:
+        timeout = float(timeout)
+    except (TypeError, ValueError):
+        raise ValueError("request_timeout must be a positive number")
+    if timeout <= 0 or not math.isfinite(timeout):
+        raise ValueError("request_timeout must be a positive number")
+    return timeout
+
+
 def nested_dict(n, type):
     if n == 1:
         return defaultdict(type)
@@ -82,86 +129,85 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
     """Class for communication with IQ Option API."""
      
     # pylint: disable=too-many-public-methods
-    socket_option_opened={}
-    timesync = TimeSync()
-    profile = Profile()
-    candles = Candles()
-    listinfodata = ListInfoData()
-    api_option_init_all_result = []
-    api_option_init_all_result_v2 = []
-    # for digital
-    underlying_list_data = None
-    position_changed = None
-    instrument_quites_generated_data = nested_dict(2, dict)
-    instrument_quotes_generated_raw_data=nested_dict(2, dict)
-    instrument_quites_generated_timestamp = nested_dict(2, dict)
-    strike_list = None
-    leaderboard_deals_client=None
-    #position_changed_data = nested_dict(2, dict)
-    #microserviceName_binary_options_name_option=nested_dict(2,dict)
-    order_async=nested_dict(2, dict)
-    game_betinfo = Game_betinfo_data()
-    instruments = None
-    financial_information = None
-    buy_id = None
-    buy_order_id = None
-    traders_mood = {}  # get hight(put) %
-    order_data = None
-    positions = None
-    position = None
-    deferred_orders = None
-    position_history = None
-    position_history_v2 = None
-    available_leverages = None
-    order_canceled = None
-    close_position_data = None
-    overnight_fee = None
-    # ---for real time
-    digital_option_placed_id = None
-    live_deal_data=nested_dict(3, deque)
+    # Runtime state is initialized in __init__. Keeping mutable caches on the
+    # class object makes independent broker sessions leak data into each other.
 
-
-     
-    subscribe_commission_changed_data=nested_dict(2,dict)
-    real_time_candles = nested_dict(3, dict)
-    real_time_candles_maxdict_table = nested_dict(2, dict)
-    candle_generated_check = nested_dict(2, dict)
-    candle_generated_all_size_check = nested_dict(1, dict)
-    # ---for api_game_getoptions_result
-    api_game_getoptions_result = None
-    sold_options_respond = None
-    tpsl_changed_respond = None
-    auto_margin_call_changed_respond = None
-    top_assets_updated_data={}
-    get_options_v2_data=None
-    # --for binary option multi buy
-    buy_multi_result = None
-    buy_multi_option = {}
-    #
-    result = None
-    training_balance_reset_request=None
-    balances_raw=None
-    user_profile_client=None
-    leaderboard_userinfo_deals_client=None
-    users_availability=None
-    # ------------------
-
-    def __init__(self, host, username, password, proxies=None):
+    def __init__(self, host, username, password, proxies=None, request_timeout=_DEFAULT_HTTP_REQUEST_TIMEOUT):
         """
         :param str host: The hostname or ip address of a IQ Option server.
         :param str username: The username of a IQ Option server.
         :param str password: The password of a IQ Option server.
         :param dict proxies: (optional) The http request proxies.
+        :param float request_timeout: (optional) Timeout for HTTP requests.
         """
         self.https_url = "https://{host}/api".format(host=host)
         self.wss_url = "wss://{host}/echo/websocket".format(host=host)
         self.websocket_client = None
+        self._send_lock = threading.Lock()
+        self.websocket_last_message_error = None
+        self.closed_option_last_error = None
+        self.http_last_request = None
+        self.http_last_error = None
+        self.socket_option_opened = {}
+        self.socket_option_closed = {}
+        self.timesync = TimeSync()
+        self.profile = Profile()
+        self.candles = Candles()
+        self.listinfodata = ListInfoData()
+        self.api_option_init_all_result = []
+        self.api_option_init_all_result_v2 = []
+        self.underlying_list_data = None
+        self.position_changed = None
+        self.instrument_quites_generated_data = nested_dict(2, dict)
+        self.instrument_quotes_generated_raw_data = nested_dict(2, dict)
+        self.instrument_quites_generated_timestamp = nested_dict(2, dict)
+        self.strike_list = None
+        self.leaderboard_deals_client = None
+        self.order_async = nested_dict(2, dict)
+        self.game_betinfo = Game_betinfo_data()
+        self.instruments = None
+        self.financial_information = None
+        self.buy_id = None
+        self.buy_order_id = None
+        self.traders_mood = {}
+        self.order_data = None
+        self.positions = None
+        self.position = None
+        self.deferred_orders = None
+        self.position_history = None
+        self.position_history_v2 = None
+        self.available_leverages = None
+        self.order_canceled = None
+        self.close_position_data = None
+        self.overnight_fee = None
+        self.digital_option_placed_id = None
+        self.live_deal_data = nested_dict(3, deque)
+        self.subscribe_commission_changed_data = nested_dict(2, dict)
+        self.real_time_candles = nested_dict(3, dict)
+        self.real_time_candles_maxdict_table = nested_dict(2, dict)
+        self.candle_generated_check = nested_dict(2, dict)
+        self.candle_generated_all_size_check = nested_dict(1, dict)
+        self.api_game_getoptions_result = None
+        self.sold_options_respond = None
+        self.tpsl_changed_respond = None
+        self.auto_margin_call_changed_respond = None
+        self.top_assets_updated_data = {}
+        self.get_options_v2_data = None
+        self.buy_multi_result = None
+        self.buy_multi_option = {}
+        self.result = None
+        self.training_balance_reset_request = None
+        self.balances_raw = None
+        self.user_profile_client = None
+        self.leaderboard_userinfo_deals_client = None
+        self.users_availability = None
         self.session = requests.Session()
         self.session.verify = False
         self.session.trust_env = False
         self.username = username
         self.password = password
         self.proxies = proxies
+        self.request_timeout = _normalize_http_request_timeout(request_timeout)
         # is used to determine if a buyOrder was set  or failed. If
         # it is None, there had been no buy order yet or just send.
         # If it is false, the last failed
@@ -194,19 +240,35 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
         url = self.prepare_http_url(resource)
 
         logger.debug(url)
+        self.http_last_request = {
+            "method": method,
+            "url": url,
+            "timeout": self.request_timeout,
+        }
+        self.http_last_error = None
 
-        response = self.session.request(method=method,
-                                        url=url,
-                                        data=data,
-                                        params=params,
-                                        headers=headers,
-                                        proxies=self.proxies)
+        try:
+            response = self.session.request(method=method,
+                                            url=url,
+                                            data=data,
+                                            params=params,
+                                            headers=headers,
+                                            proxies=self.proxies,
+                                            timeout=self.request_timeout)
+            response.raise_for_status()
+        except Exception as exc:
+            self.http_last_error = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "method": method,
+                "url": url,
+                "timeout": self.request_timeout,
+            }
+            raise
         logger.debug(response)
         logger.debug(response.text)
-        logger.debug(response.headers)
-        logger.debug(response.cookies)
-
-        response.raise_for_status()
+        logger.debug("response headers: %s", _redact_http_mapping(response.headers))
+        logger.debug("response cookies: %s", _redact_http_cookies(response.cookies))
         return response
 
     def send_http_request_v2(self, url, method, data=None, params=None, headers=None):  # pylint: disable=too-many-arguments
@@ -223,19 +285,41 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
         """
         logger = logging.getLogger(__name__)
 
-        logger.debug(method+": "+url+" headers: "+str(self.session.headers)+" cookies: "+str(self.session.cookies.get_dict()))
+        logger.debug(
+            "%s: %s headers: %s cookies: %s",
+            method,
+            url,
+            _redact_http_mapping(self.session.headers),
+            _redact_http_mapping(self.session.cookies.get_dict(), redact_all=True),
+        )
+        self.http_last_request = {
+            "method": method,
+            "url": url,
+            "timeout": self.request_timeout,
+        }
+        self.http_last_error = None
         
-        
-        response = self.session.request(method=method,
-                                        url=url,
-                                        data=data,
-                                        params=params,
-                                        headers=headers,
-                                        proxies=self.proxies)
+        try:
+            response = self.session.request(method=method,
+                                            url=url,
+                                            data=data,
+                                            params=params,
+                                            headers=headers,
+                                            proxies=self.proxies,
+                                            timeout=self.request_timeout)
+        except Exception as exc:
+            self.http_last_error = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "method": method,
+                "url": url,
+                "timeout": self.request_timeout,
+            }
+            raise
         logger.debug(response)
         logger.debug(response.text)
-        logger.debug(response.headers)
-        logger.debug(response.cookies)
+        logger.debug("response headers: %s", _redact_http_mapping(response.headers))
+        logger.debug("response cookies: %s", _redact_http_cookies(response.cookies))
 
         #response.raise_for_status()
         return response
@@ -261,12 +345,19 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
                                msg=msg, request_id=request_id))
          
          
-        while (global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write) and no_force_send:
-            pass
-        global_value.ssl_Mutual_exclusion_write=True
-        self.websocket.send(data)
-        logger.debug(data)
-        global_value.ssl_Mutual_exclusion_write=False
+        send_lock = getattr(self, "_send_lock", None)
+        if send_lock is None:
+            self._send_lock = threading.Lock()
+            send_lock = self._send_lock
+        with send_lock:
+            while (global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write) and no_force_send:
+                time.sleep(0.001)
+            global_value.ssl_Mutual_exclusion_write=True
+            try:
+                self.websocket.send(data)
+                logger.debug(data)
+            finally:
+                global_value.ssl_Mutual_exclusion_write=False
         
     @property
     def logout(self):
@@ -727,6 +818,7 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
                                                  "check_hostname": False, "cert_reqs": ssl.CERT_NONE, "ca_certs": "cacert.pem"}})  # for fix pyinstall error: cafile, capath and cadata cannot be all omitted
         self.websocket_thread.daemon = True
         self.websocket_thread.start()
+        start = time.time()
         while True:
             try:
                 if global_value.check_websocket_if_error:
@@ -738,7 +830,9 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
             except:
                 pass
 
-            pass
+            if time.time() - start > 30:
+                return False,"Websocket connection timeout."
+            time.sleep(0.05)
     def get_ssid(self):
         response=None
         try:
@@ -751,8 +845,11 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
     def send_ssid(self):
         self.profile.msg=None
         self.ssid(global_value.SSID)  # pylint: disable=not-callable
+        start = time.time()
         while self.profile.msg==None:
-            pass
+            if time.time() - start > 30:
+                return False
+            time.sleep(0.05)
         if self.profile.msg==False:
             return False
         else:
@@ -803,20 +900,29 @@ class IQOptionAPI(object):  # pylint: disable=too-many-instance-attributes
         
 
         self.timesync.server_timestamp = None
+        start = time.time()
         while True:
             try:
                 if self.timesync.server_timestamp != None:
                     break
             except:
                 pass
+            if time.time() - start > 30:
+                return False,"timeSync timeout"
+            time.sleep(0.05)
         return True,None
 
     def close(self):
-        self.websocket.close()
-        self.websocket_thread.join()
+        websocket = getattr(getattr(self, "websocket_client", None), "wss", None)
+        if websocket is not None:
+            websocket.close()
+        websocket_thread = getattr(self, "websocket_thread", None)
+        if websocket_thread is not None and websocket_thread.is_alive():
+            websocket_thread.join(timeout=5)
 
     def websocket_alive(self):
-        return self.websocket_thread.is_alive()
+        websocket_thread = getattr(self, "websocket_thread", None)
+        return websocket_thread is not None and websocket_thread.is_alive()
 
     @property
     def Get_User_Profile_Client(self):

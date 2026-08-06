@@ -36,7 +36,67 @@ class WebsocketClient(object):
                 else:
                     #del mini key
                     del dict[key1][key2][sorted(dict[key1][key2].keys(), reverse=False)[0]]   
+
+    def _record_closed_option_error(self, reason, message, exc=None):
+        error = {"reason": reason}
+        if isinstance(message, dict):
+            error["name"] = message.get("name")
+            error["msg"] = message.get("msg")
+        if exc is not None:
+            error["type"] = type(exc).__name__
+            error["message"] = str(exc)
+        try:
+            self.api.closed_option_last_error = error
+        except Exception:
+            pass
+
+    def _store_closed_option(self, message):
+        try:
+            if not isinstance(message, dict):
+                self._record_closed_option_error("invalid_message", message)
+                return
+            msg = message.get("msg", {})
+            if not isinstance(msg, dict):
+                self._record_closed_option_error("invalid_msg", message)
+                return
+            option_id = msg.get("option_id", msg.get("id"))
+            if option_id is None:
+                self._record_closed_option_error("missing_option_id", message)
+                return
+            try:
+                option_id = int(option_id)
+            except (TypeError, ValueError) as exc:
+                self._record_closed_option_error("invalid_option_id", message, exc)
+                return
+            self.api.order_async[option_id]["option-closed"] = message
+            if not isinstance(getattr(self.api, "socket_option_closed", None), dict):
+                self.api.socket_option_closed = {}
+            self.api.socket_option_closed[option_id] = message
+            try:
+                self.api.closed_option_last_error = None
+            except Exception:
+                pass
+        except Exception:
+            logging.getLogger(__name__).debug("failed to store closed option", exc_info=True)
+            self._record_closed_option_error("store_failed", message)
+
     def on_message(self, message): # pylint: disable=unused-argument
+        global_value.ssl_Mutual_exclusion=True
+        try:
+            self._process_message(message)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("failed to process websocket message")
+            try:
+                self.api.websocket_last_message_error = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            except Exception:
+                pass
+        finally:
+            global_value.ssl_Mutual_exclusion=False
+
+    def _process_message(self, message): # pylint: disable=unused-argument
         """Method to process websocket messages."""
         global_value.ssl_Mutual_exclusion=True
         logger = logging.getLogger(__name__)
@@ -156,6 +216,8 @@ class WebsocketClient(object):
         elif message["name"] == "socket-option-opened":
             id=message["msg"]["id"]
             self.api.socket_option_opened[id]=message
+        elif message["name"] == "socket-option-closed":
+            self._store_closed_option(message)
              
         elif message["name"] == "api_option_init_all_result":
             self.api.api_option_init_all_result = message["msg"]
@@ -168,10 +230,10 @@ class WebsocketClient(object):
         elif message["name"]=="financial-information":
             self.api.financial_information=message
         elif message["name"]=="position-changed":
-            
-            if message["microserviceName"]=="portfolio" and (message["msg"]["source"]=="digital-options") or message["msg"]["source"]=="trading":
+            source = message.get("msg", {}).get("source")
+            if message.get("microserviceName")=="portfolio" and source in ("digital-options", "trading"):
                 self.api.order_async[int(message["msg"]["raw_event"]["order_ids"][0])] [message["name"]]=message
-            elif message["microserviceName"]=="portfolio" and message["msg"]["source"]=="binary-options":
+            elif message.get("microserviceName")=="portfolio" and source=="binary-options":
                 self.api.order_async[int(message["msg"]["external_id"])] [message["name"]]=message
                 #print(message)
             
@@ -179,8 +241,7 @@ class WebsocketClient(object):
             self.api.order_async[int(message["msg"]["option_id"])][message["name"]]=message
        
         elif message["name"]=="option-closed":
-             
-            self.api.order_async[int(message["msg"]["option_id"])][message["name"]]=message
+            self._store_closed_option(message)
         
        
         elif message["name"]=="top-assets-updated":

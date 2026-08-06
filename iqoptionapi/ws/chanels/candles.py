@@ -9,7 +9,7 @@ class GetCandles(Base):
 
     name = "sendMessage"
 
-    def __call__(self, active_id, interval, count,endtime):
+    def __call__(self, active_id, interval, count,endtime, request_id=""):
         """Method to send message to candles websocket chanel.
 
         :param active_id: The active/asset identifier.
@@ -24,9 +24,8 @@ class GetCandles(Base):
                         "active_id":int(active_id),
                         "size":interval,#time size sample:if interval set 1 mean get time 0~1 candle 
                         "to":int(endtime),   #int(self.api.timesync.server_timestamp),
-                        "count":count,#get how many candle
-                        "":active_id
+                        "count":count#get how many candle
                         }
                 }
 
-        self.send_websocket_request(self.name, data)
+        self.send_websocket_request(self.name, data, request_id=str(request_id))
